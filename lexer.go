@@ -33,7 +33,7 @@ type Lexer struct {
 	patterns   []*regexp.Regexp
 }
 
-// NewLexerFromLines creates a new Lexer with token types from given lines
+// NewLexerFromLines creates a new Lexer with token types and patterns from given lines
 func NewLexerFromLines(lines []string) (*Lexer, error) {
 	numLines := len(lines)
 	tokenTypes := make([]string, 0, numLines)
@@ -55,4 +55,70 @@ func NewLexerFromLines(lines []string) (*Lexer, error) {
 	}
 	lexer := new(Lexer{tokenTypes: tokenTypes, patterns: patterns})
 	return lexer, nil
+}
+
+// NewLexerFromFile creates a new Lexer with token types and patterns from given file path
+func NewLexerFromFile(path string) (*Lexer, error) {
+	cfgFile, err := readCfgLines(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewLexerFromLines(cfgFile.tokenLines)
+}
+
+// Tokenize tokenizes the given string, and returns the list of Tokens.
+// We can pass in a list of TokenTypes to ignore (pass nil if nothing to ignore).
+func (lexer *Lexer) Tokenize(text string, ignoreTypes []string) ([]Token, error) {
+	ignore := make(map[string]bool)
+	for _, tokenType := range ignoreTypes {
+		ignore[tokenType] = true
+	}
+	tokens := make([]Token, 0)
+	for row, line := range strings.Split(text, "\n") {
+		lineTokens, err := lexer.tokenizeLine(row, []byte(line), ignore)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, lineTokens...)
+	}
+	return tokens, nil
+}
+
+// tokenizeLine tokenizes one line
+func (lexer *Lexer) tokenizeLine(row int, line []byte, ignoreType map[string]bool) ([]Token, error) {
+	// Tokenize line by checking each pattern for a match, until line is fully consumed or no pattern matches remaining line
+	tokens := make([]Token, 0)
+	col := 0 // keeps track of current column index from original line
+	for len(line) > 0 {
+		found := false
+		for i, pattern := range lexer.patterns {
+			match := pattern.FindIndex(line)
+			if match == nil {
+				continue // move on to next if not a match
+			}
+			start, end := match[0], match[1]
+			chunk := string(line[start:end]) // get chunk of text matched by pattern
+			tokenType := lexer.tokenTypes[i] // get corresponding token type
+			line = line[end:]                // consume chunk and get remaining line
+			if !ignoreType[tokenType] {
+				// Add to tokens if token type is not ignored
+				tokens = append(tokens, Token{
+					Type:     tokenType,
+					Text:     chunk,
+					Row:      row,
+					ColStart: col + start,
+					ColEnd:   col + end,
+				})
+			}
+			// Move column index forward
+			col += end - start
+			found = true
+			break
+		}
+		if !found {
+			limit := min(10, len(line))
+			return nil, fmt.Errorf("syntax error: unexpected %s at line %d, col %d", string(line[:limit]), row+1, col+1)
+		}
+	}
+	return tokens, nil
 }
